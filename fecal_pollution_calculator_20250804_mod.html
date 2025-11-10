@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Faecal Pollution Calculator</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 640px; margin: 32px;}
+    label { font-weight: bold; }
+    .result { margin-top: 20px; font-size: 1.1em; background: #f7f7f9; border: 1px #ddd solid; padding:16px;}
+    select,input[type=number] { font-size: 1em; padding: 2px 4px;}
+    .details-toggle { margin: 12px 0 6px 0; }
+    .calc-details { margin-bottom: 12px;}
+  </style>
+</head>
+<body>
+  <h2>Faecal Pollution Calculator</h2>
+  
+  <label for="source">Source:</label>
+  <select id="source" onchange="updateTargetMethodOptions()">
+    <option value="sewage">Sewage</option>
+    <option value="dog">Dog waste</option>
+  </select>
+  <br><br>
+
+  <label for="target">Target:</label>
+  <select id="target"></select>
+  <br><br>
+
+  <label for="method">PCR Method:</label>
+  <select id="method">
+    <option value="dPCR">digital PCR</option>
+    <option value="qPCR">quantitative PCR</option>
+  </select>
+  <br><br>
+  
+  <label for="copy_number_input">Copy Number (count per litre of environmental aquatic sample):</label>
+  <input type="number" step="any" id="copy_number_input" placeholder="e.g. 32000000">
+  
+  <br><br>
+  <button onclick="computeResult()">Calculate</button>
+  
+  <div class="result" id="output"></div>
+
+<script>
+const targets = {
+  sewage: ["HF183", "Lachno3"],
+  dog: ["DG3"]
+};
+const models = {
+  sewage: {
+    "Log.HF183/L.dPCR":      { intercept:-8.145, intercept_low:-8.396, intercept_high:-7.895, slope:0.864, slope_low:0.830, slope_high:0.898, unit:"% of raw sewage in environmental sample" },
+    "Log.HF183/L.qPCR":      { intercept:-9.192, intercept_low:-9.409, intercept_high:-8.976, slope:0.977, slope_low:0.948, slope_high:1.005, unit:"% of raw sewage in environmental sample" },
+    "Log.Lachno3/L.dPCR":    { intercept:-8.461, intercept_low:-8.770, intercept_high:-8.151, slope:0.926, slope_low:0.885, slope_high:0.968, unit:"% of raw sewage in environmental sample" },
+    "Log.Lachno3/L.qPCR":    { intercept:-8.999, intercept_low:-9.291, intercept_high:-8.708, slope:1.003, slope_low:0.963, slope_high:1.043, unit:"% of raw sewage in environmental sample" }
+  },
+  dog: {
+    "Log.DG3/L.dPCR":        { intercept:-7.222, intercept_low:-7.500, intercept_high:-7.000, slope:0.743, slope_low:0.702, slope_high:0.784, unit:"g/L of wet weight of dog faeces" },
+    "Log.DG3/L.qPCR":        { intercept:-8.333, intercept_low:-8.555, intercept_high:-8.111, slope:0.855, slope_low:0.820, slope_high:0.890, unit:"g/L of wet weight of dog faeces" },
+    "Log.DG3/L.qPCR.modified":{ intercept:-6.012, intercept_low:-6.300, intercept_high:-5.800, slope:0.911, slope_low:0.870, slope_high:0.950, unit:"g/L of wet weight of dog faeces" }
+  }
+};
+const dog_samples = Object.keys(models.dog);
+const sewage_samples = Object.keys(models.sewage);
+
+function updateTargetMethodOptions() {
+  const source = document.getElementById('source').value;
+  const targetSelect = document.getElementById('target');
+  targetSelect.innerHTML = "";
+  for(const t of targets[source]) {
+    let opt = document.createElement("option");
+    opt.value = t;
+    opt.text = t;
+    targetSelect.appendChild(opt);
+  }
+  document.getElementById('method').selectedIndex = 0;
+}
+updateTargetMethodOptions();
+
+function computeResult() {
+  const source = document.getElementById('source').value;
+  const target = document.getElementById('target').value;
+  let method = document.getElementById('method').value;
+  const expo_x_input = parseFloat(document.getElementById('copy_number_input').value);
+  const outputDiv = document.getElementById('output');
+  
+  if (!target || isNaN(expo_x_input) || expo_x_input<=0) {
+    outputDiv.innerHTML = '<span style="color: red;">Please select a sample and enter a valid copy number (count &gt;0) per litre of environmental aquatic sample.</span>';
+    return;
+  }
+
+  // Compose the sample key, e.g. "Log.HF183/L.dPCR"
+  let sample = "Log." + target + "/L." + method;
+
+  if(!(sample in models[source])) {
+    outputDiv.innerHTML = "<span style='color:red;'>No model coefficients for this combination.</span>";
+    return;
+  }
+  const m = models[source][sample];
+
+  // Use log10 of count as x
+  const x = Math.log10(expo_x_input);
+
+  // Calculation logic
+  const y_estimate = m.intercept + m.slope * x;
+  const y_low = m.intercept_low + m.slope_low * x;
+  const y_high = m.intercept_high + m.slope_high * x;
+  const toPM = [y_high, y_low];
+  const PM = (Math.max(...toPM) - Math.min(...toPM))/2;
+  const value_toPM = [Math.pow(10, y_low), Math.pow(10, y_high)];
+
+  let value, value_PM, unit;
+  if (dog_samples.includes(sample)) {
+    // Base dog values in g/L
+    const value_g      = Math.pow(10, y_estimate);
+    const value_low_g  = Math.pow(10, y_low);
+    const value_high_g = Math.pow(10, y_high);
+    const value_PM_g   = (Math.max(...value_toPM) - Math.min(...value_toPM))/2;
+    if (value_g < 0.001) {
+      value      = value_g * 1000;
+      value_PM   = value_PM_g * 1000;
+      unit       = "mg/L of wet weight of dog faeces";
+    } else {
+      value      = value_g;
+      value_PM   = value_PM_g;
+      unit       = "g/L of wet weight of dog faeces";
+    }
+  } else if (sewage_samples.includes(sample)) {
+    value      = 100 * Math.pow(10, y_estimate);
+    value_PM   = (Math.max(...value_toPM) - Math.min(...value_toPM))/2;
+    unit       = "% of raw sewage in environmental sample";
+  } else {
+    value = value_PM = NaN;
+    unit = "Unknown";
+  }
+
+  // Calculation details section (initially hidden)
+  let calcDetails = `
+    <div class="calc-details" id="details-block" style="display:none;">
+      <b>Sample:</b> ${sample}<br>
+      <b>Copy number (input, per litre of environmental aquatic sample):</b> ${expo_x_input}<br>
+      <b>Log<sub>10</sub> of copy number:</b> ${x.toFixed(3)}<br>
+      <b>Predicted y:</b> ${y_estimate.toFixed(3)}<br>
+      <b>Lower bound y<sub>low</sub>:</b> ${y_low.toFixed(3)}<br>
+      <b>Upper bound y<sub>high</sub>:</b> ${y_high.toFixed(3)}<br>
+      <b>95% CI for y:</b> (${y_low.toFixed(3)}, ${y_high.toFixed(3)})<br>
+      <b>Final result:</b> ${y_estimate.toFixed(3)} &plusmn; ${PM.toFixed(3)}<br>
+      <hr>
+    </div>
+  `;
+
+  // Toggle button
+  let toggleBtn = `<button class="details-toggle" id="details-toggle-btn" type="button" onclick="toggleDetails()">Show calculation details...</button>`;
+
+  // Output block: details hidden by default, converted always shown
+  outputDiv.innerHTML =
+    toggleBtn +
+    calcDetails +
+    `<b>Converted:</b> <br>` +
+    `<span>${value.toPrecision(4)} &plusmn; ${value_PM.toPrecision(3)} (${unit})</span>`;
+    
+  // Store expanded/collapsed status
+  window.detailsVisible = false;
+}
+
+// Toggle details visibility and button label
+function toggleDetails() {
+  const block = document.getElementById("details-block");
+  const btn = document.getElementById("details-toggle-btn");
+  if (!block || !btn) return;
+
+  window.detailsVisible = !window.detailsVisible;
+  block.style.display = window.detailsVisible ? "block" : "none";
+  btn.textContent = window.detailsVisible ? "Hide calculation details" : "Show calculation details...";
+}
+</script>
+</body>
+</html>
+
