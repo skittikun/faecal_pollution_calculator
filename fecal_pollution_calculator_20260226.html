@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Faecal Pollution Calculator</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 32px;
+    }
+    h1, h2 {
+      margin-bottom: 0.4em;
+    }
+    label {
+      font-weight: bold;
+      display: inline-block;
+      margin-top: 8px;
+      margin-bottom: 4px;
+    }
+    select, input[type="number"] {
+      font-size: 1em;
+      padding: 2px 4px;
+      margin-top: 2px;
+    }
+    .result {
+      margin-top: 20px;
+      font-size: 1.1em;
+      background: #f7f7f9;
+      border: 1px #ddd solid;
+      padding: 16px;
+      white-space: pre-wrap;
+    }
+    .details-toggle {
+      margin: 12px 0 6px 0;
+    }
+    .calc-details {
+      margin-bottom: 12px;
+      background: #fafafa;
+      border: 1px solid #ddd;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+    .lod-loq-box {
+      border: 1px solid #888;
+      padding: 8px 10px;
+      margin-top: 10px;
+      background-color: #f9f9f9;
+    }
+    .lod-loq-title {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    .section-box {
+      border: 1px solid #ccc;
+      padding: 10px 12px;
+      margin-top: 12px;
+    }
+    .section-title {
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+    button {
+      margin-top: 10px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Faecal Pollution Calculator</h2>
+
+<div class="section-box">
+  <div class="section-title">Source and marker</div>
+
+  <label for="source">Source</label><br>
+  <select id="source" onchange="updateTargetMethodOptions(); updateMarkerFromSource();">
+    <option value="sewage">Sewage</option>
+    <option value="dog">Dog waste</option>
+  </select>
+
+  <br><br>
+
+  <!-- Marker depends on source: sewage = HF183/Lachno3, dog = DG3 -->
+  <label for="markerSelect">Marker</label><br>
+  <select id="markerSelect">
+    <!-- options will be populated dynamically -->
+  </select>
+
+  <br><br>
+
+  <label for="method">PCR Method</label><br>
+  <select id="method">
+    <option value="dPCR">digital PCR</option>
+    <option value="qPCR">quantitative PCR</option>
+  </select>
+
+  <!-- LOD/LOQ display -->
+  <div id="lodLoqContainer" class="lod-loq-box" style="display:none;">
+    <div class="lod-loq-title">LOD and LOQ of detectability</div>
+    <div id="lodLoqContent"></div>
+  </div>
+</div>
+
+<div class="section-box">
+  <div class="section-title">Detectability report</div>
+  <div id="detectabilityReport">
+    Select marker, method, and enter a copy number to view detectability.
+  </div>
+</div>
+
+<div class="section-box">
+  <div class="section-title">Input</div>
+  <label for="copynumberinput">Copy Number (count per litre of environmental aquatic sample)</label><br>
+  <input type="number" step="any" id="copynumberinput" placeholder="e.g. 32000000">
+</div>
+
+<div class="section-box">
+  <div class="section-title">Calculation</div>
+  <button onclick="computeResult()">Calculate</button>
+
+  <div class="result" id="output"></div>
+</div>
+
+<script>
+  // Targets available per source (from original file)
+  const targets = {
+    sewage: ["HF183", "Lachno3"],
+    dog: ["DG3"]
+  };
+
+  // Model coefficients (from original file, truncated to those keys that are used)
+  const models = {
+    sewage: {
+      "Log.HF183L.dPCR": {
+        intercept: -8.145,
+        interceptlow: -8.396,
+        intercepthigh: -7.895,
+        slope: 0.864,
+        slopelow: 0.830,
+        slopehigh: 0.898,
+        unit: "% of raw sewage in environmental sample"
+      },
+      "Log.HF183L.qPCR": {
+        intercept: -9.192,
+        interceptlow: -9.409,
+        intercepthigh: -8.976,
+        slope: 0.977,
+        slopelow: 0.948,
+        slopehigh: 1.005,
+        unit: "% of raw sewage in environmental sample"
+      },
+      "Log.Lachno3L.dPCR": {
+        intercept: -8.461,
+        interceptlow: -8.770,
+        intercepthigh: -8.151,
+        slope: 0.926,
+        slopelow: 0.885,
+        slopehigh: 0.968,
+        unit: "% of raw sewage in environmental sample"
+      },
+      "Log.Lachno3L.qPCR": {
+        intercept: -8.999,
+        interceptlow: -9.291,
+        intercepthigh: -8.708,
+        slope: 1.003,
+        slopelow: 0.963,
+        slopehigh: 1.043,
+        unit: "% of raw sewage in environmental sample"
+      }
+    },
+    dog: {
+      "Log.DG3L.dPCR": {
+        intercept: -7.222,
+        interceptlow: -7.500,
+        intercepthigh: -7.000,
+        slope: 0.743,
+        slopelow: 0.702,
+        slopehigh: 0.784,
+        unit: "g/L of wet weight of dog faeces"
+      },
+      "Log.DG3L.qPCR": {
+        intercept: -8.333,
+        interceptlow: -8.555,
+        intercepthigh: -8.111,
+        slope: 0.855,
+        slopelow: 0.820,
+        slopehigh: 0.890,
+        unit: "g/L of wet weight of dog faeces"
+      },
+      "Log.DG3L.qPCR.modified": {
+        intercept: -6.012,
+        interceptlow: -6.300,
+        intercepthigh: -5.800,
+        slope: 0.911,
+        slopelow: 0.870,
+        slopehigh: 0.950,
+        unit: "g/L of wet weight of dog faeces"
+      }
+    }
+  };
+
+  const dogsamples = Object.keys(models.dog);
+  const sewagesamples = Object.keys(models.sewage);
+
+  // LOD/LOQ data (your values)
+  const lodLoqData = {
+    HF183: {
+      qPCR: {
+        LOD: "1 × 10⁻⁹ (raw sewage)",
+        LOQ: "1 × 10⁻⁶"
+      },
+      dPCR: {
+        LOD: "1 × 10⁻¹⁰",
+        LOQ: "1 × 10⁻⁶"
+      }
+    },
+    Lachno3: {
+      qPCR: {
+        LOD: "1 × 10⁻⁹",
+        LOQ: "1 × 10⁻⁶"
+      },
+      dPCR: {
+        LOD: "1 × 10⁻¹⁰",
+        LOQ: "1 × 10⁻⁵"
+      }
+    },
+    DG3: {
+      qPCR: {
+        LOD: "2 × 10⁻⁹ g/L",
+        LOQ: "2 × 10⁻⁷"
+      },
+      dPCR: {
+        LOD: "2 × 10⁻⁹",
+        LOQ: "2 × 10⁻⁷"
+      }
+    }
+  };
+
+  // Simple numeric thresholds (fraction of raw sewage or g/L equivalent) – placeholder
+  const detectabilityThresholds = {
+    HF183: {
+      qPCR: { lod: 1e-9, loq: 1e-6 },
+      dPCR: { lod: 1e-10, loq: 1e-6 }
+    },
+    Lachno3: {
+      qPCR: { lod: 1e-9, loq: 1e-6 },
+      dPCR: { lod: 1e-10, loq: 1e-5 }
+    },
+    DG3: {
+      qPCR: { lod: 2e-9, loq: 2e-7 },
+      dPCR: { lod: 2e-9, loq: 2e-7 }
+    }
+  };
+
+  const sourceSelect = document.getElementById("source");
+  const markerSelect = document.getElementById("markerSelect");
+  const methodSelect = document.getElementById("method");
+  const lodLoqContainer = document.getElementById("lodLoqContainer");
+  const lodLoqContent = document.getElementById("lodLoqContent");
+  const detectabilityReport = document.getElementById("detectabilityReport");
+  const copyNumberInput = document.getElementById("copynumberinput");
+  const outputDiv = document.getElementById("output");
+
+  function updateMarkerFromSource() {
+    const source = sourceSelect.value; // "sewage" or "dog"
+    const markerOptions = targets[source] || [];
+    markerSelect.innerHTML = "";
+    markerOptions.forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      markerSelect.appendChild(opt);
+    });
+    // After resetting markers, also refresh LOD/LOQ and detectability
+    updateLodLoqDisplay();
+    updateDetectability();
+  }
+
+  function updateTargetMethodOptions() {
+    // Keeps method menu intact – original onchange was only for target; now handled by updateMarkerFromSource
+  }
+
+  function updateLodLoqDisplay() {
+    const marker = markerSelect.value;
+    const method = methodSelect.value === "dPCR" ? "dPCR" : "qPCR";
+
+    if (!marker || !lodLoqData[marker] || !lodLoqData[marker][method]) {
+      lodLoqContainer.style.display = "none";
+      lodLoqContent.innerHTML = "";
+      return;
+    }
+    const info = lodLoqData[marker][method];
+    lodLoqContent.innerHTML =
+      "<strong>Marker:</strong> " + marker +
+      "<br><strong>Method:</strong> " + method +
+      "<br><strong>LOD:</strong> " + info.LOD +
+      "<br><strong>LOQ:</strong> " + info.LOQ;
+    lodLoqContainer.style.display = "block";
+  }
+
+  function updateDetectability() {
+    const marker = markerSelect.value;
+    const method = methodSelect.value === "dPCR" ? "dPCR" : "qPCR";
+    const copyVal = parseFloat(copyNumberInput.value);
+
+    if (!marker || !method) {
+      detectabilityReport.textContent =
+        "Select both marker and method to view detectability.";
+      return;
+    }
+
+    if (isNaN(copyVal) || copyVal <= 0) {
+      detectabilityReport.textContent =
+        "Enter a positive copy number to evaluate detectability for " +
+        marker + " (" + method + ").";
+      return;
+    }
+
+    const thresholds = detectabilityThresholds[marker][method];
+    // For now treat copyVal as proxy for fraction; you can replace with your own mapping
+    const fraction = copyVal;
+
+    let category;
+    let interpretation;
+
+    if (fraction < thresholds.lod) {
+      category = "Below LOD";
+      interpretation =
+        "Target is expected to be undetectable or detected only sporadically.";
+    } else if (fraction < thresholds.loq) {
+      category = "Between LOD and LOQ";
+      interpretation =
+        "Target should often be detectable but quantitative estimates are not reliable.";
+    } else {
+      category = "Above LOQ";
+      interpretation =
+        "Target is within the reliable quantification range; quantitative estimates are expected to be robust.";
+    }
+
+    detectabilityReport.textContent =
+      "Marker: " + marker +
+      " | Method: " + method +
+      " | Category: " + category +
+      " | Interpretation: " + interpretation;
+  }
+
+  function computeResult() {
+    const source = sourceSelect.value;       // "sewage" or "dog"
+    const marker = markerSelect.value;       // HF183, Lachno3, DG3
+    let method = methodSelect.value;         // "dPCR" or "qPCR"
+    const expoxinput = parseFloat(copyNumberInput.value);
+    const outputDiv = document.getElementById("output");
+
+    if (!marker || isNaN(expoxinput) || expoxinput <= 0) {
+      outputDiv.innerHTML =
+        '<span style="color:red;">Please select a marker and enter a valid copy number (&gt; 0) per litre of environmental aquatic sample.</span>';
+      return;
+    }
+
+    // Construct sample key, e.g., "Log.HF183L.dPCR"
+    let sample = "Log." + marker + "L." + method;
+
+    if (!(sample in models[source])) {
+      outputDiv.innerHTML =
+        '<span style="color:red;">No model coefficients for this combination.</span>';
+      return;
+    }
+
+    const m = models[source][sample];
+
+    const x = Math.log10(expoxinput);
+
+    const yestimate  = m.intercept + m.slope     * x;
+    const ylow       = m.interceptlow + m.slopelow * x;
+    const yhigh      = m.intercepthigh + m.slopehigh * x;
+
+    const toPM = [yhigh, ylow];
+    const PM = Math.max(...toPM) - Math.min(...toPM) / 2;
+
+    let value, valuePM, unit;
+
+    if (dogsamples.includes(sample)) {
+      const valueg = Math.pow(10, yestimate);
+      const valuelowg = Math.pow(10, ylow);
+      const valuehighg = Math.pow(10, yhigh);
+      const valuePMg = Math.max(valuehighg, valuelowg) - Math.min(valuehighg, valuelowg) / 2;
+
+      if (valueg < 0.001) {
+        value = valueg * 1000;
+        valuePM = valuePMg * 1000;
+        unit = "mg/L of wet weight of dog faeces";
+      } else {
+        value = valueg;
+        valuePM = valuePMg;
+        unit = "g/L of wet weight of dog faeces";
+      }
+    } else if (sewagesamples.includes(sample)) {
+      value = 100 * Math.pow(10, yestimate);
+      const valuelow = 100 * Math.pow(10, ylow);
+      const valuehigh = 100 * Math.pow(10, yhigh);
+      valuePM = Math.max(valuehigh, valuelow) - Math.min(valuehigh, valuelow) / 2;
+      unit = "% of raw sewage in environmental sample";
+    } else {
+      value = NaN;
+      valuePM = NaN;
+      unit = "Unknown";
+    }
+
+    updateDetectability();
+
+    let calcDetails =
+      '<div class="calc-details" id="details-block" style="display:none;">' +
+      "<b>Sample</b>: " + sample + "<br>" +
+      "<b>Copy number input (per litre of environmental aquatic sample)</b>: " + expoxinput + "<br>" +
+      "<b>Log<sub>10</sub> of copy number</b>: " + x.toFixed(3) + "<br>" +
+      "<b>Predicted y</b>: " + yestimate.toFixed(3) + "<br>" +
+      "<b>Lower bound y<sub>low</sub></b>: " + ylow.toFixed(3) + "<br>" +
+      "<b>Upper bound y<sub>high</sub></b>: " + yhigh.toFixed(3) + "<br>" +
+      "<b>Final result (y)</b>: " + yestimate.toFixed(3) + " ± " + PM.toFixed(3) + "<br>" +
+      "<hr></div>";
+
+    let toggleBtn =
+      '<button class="details-toggle" id="details-toggle-btn" type="button" onclick="toggleDetails()">Show calculation details...</button>';
+
+    outputDiv.innerHTML =
+      toggleBtn +
+      calcDetails +
+      "<b>Converted</b><br>" +
+      "<span>" + value.toPrecision(4) + " ± " + valuePM.toPrecision(3) + " " + unit + "</span>";
+  }
+
+  window.detailsVisible = false;
+  function toggleDetails() {
+    const block = document.getElementById("details-block");
+    const btn = document.getElementById("details-toggle-btn");
+    if (!block || !btn) return;
+    window.detailsVisible = !window.detailsVisible;
+    block.style.display = window.detailsVisible ? "block" : "none";
+    btn.textContent = window.detailsVisible ? "Hide calculation details" : "Show calculation details...";
+  }
+
+  // Event wiring
+  markerSelect.addEventListener("change", function () {
+    updateLodLoqDisplay();
+    updateDetectability();
+  });
+  methodSelect.addEventListener("change", function () {
+    updateLodLoqDisplay();
+    updateDetectability();
+  });
+  copyNumberInput.addEventListener("input", function () {
+    updateDetectability();
+  });
+
+  // Initial setup: default source = sewage -> HF183, Lachno3
+  updateMarkerFromSource();
+  updateLodLoqDisplay();
+  updateDetectability();
+</script>
+
+</body>
+</html>
